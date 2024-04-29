@@ -1,8 +1,4 @@
-Weichen Chai <weichenchai@gmail.com>
-	
-Apr 23, 2024, 9:23 PM (6 days ago)
-	
-to me
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
