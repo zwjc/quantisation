@@ -36,7 +36,11 @@ class LeNet(nn.Module):
         return x
 
 # Load and transform data
-transform = transforms.Compose([transforms.Resize((32, 32)), transforms.ToTensor()])
+transform = transforms.Compose([
+    transforms.Resize((32, 32)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))  # Adjust if needed to match TensorFlow's [0,1] scaling
+])
 train_dataset = datasets.MNIST(root='./data', train=True, transform=transform, download=True)
 test_dataset = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
 
