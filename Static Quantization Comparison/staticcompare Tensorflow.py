@@ -38,29 +38,27 @@ def evaluate_original_model(model, x_test, y_test):
     average_inference_time = total_inference_time / len(x_test)
     return accuracy, total_inference_time, average_inference_time
 
-def convert_to_tflite(model, quantize=True):
+def convert_to_tflite(model, quantize=True, use_gpu=True):
     start_time = time.time()
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
     if quantize:
         converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    if use_gpu:
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS, tf.lite.OpsSet.SELECT_TF_OPS]
+        converter.target_spec.supported_types = [tf.float16]
+        converter.allow_custom_ops = True
+        converter.experimental_new_converter = True
     tflite_model = converter.convert()
     quantization_time = time.time() - start_time
     return tflite_model, quantization_time
 
 def evaluate_tflite_model(tflite_model, x_test, y_test):
-    # Save the TFLite model to file
-    tflite_model_path = 'lenet_quantized.tflite'
-    with open(tflite_model_path, 'wb') as f:
-        f.write(tflite_model)
-
-    # Load the TFLite model and allocate tensors
-    interpreter = tf.lite.Interpreter(model_path=tflite_model_path)
+    interpreter = tf.lite.Interpreter(model_content=tflite_model)
     interpreter.allocate_tensors()
 
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    # Run inference on TFLite model and calculate accuracy
     prediction_digits = []
     start_time = time.time()
     for test_image in x_test:
@@ -73,7 +71,6 @@ def evaluate_tflite_model(tflite_model, x_test, y_test):
     total_inference_time = time.time() - start_time
     average_inference_time = total_inference_time / len(x_test)
 
-    # Calculate accuracy
     accurate_count = sum([int(y_pred == np.argmax(y_true)) for y_pred, y_true in zip(prediction_digits, y_test)])
     accuracy = accurate_count / len(y_test)
 
@@ -82,16 +79,16 @@ def evaluate_tflite_model(tflite_model, x_test, y_test):
 def main():
     x_train, y_train, x_test, y_test = load_and_preprocess_data()
     model = build_lenet_model()
-    model.fit(x_train, y_train, epochs=2, validation_split=0.1, verbose=2)
+    model.fit(x_train, y_train, epochs=10, validation_split=0.1, verbose=2)
     
     original_accuracy, original_total_inference_time, original_average_inference_time = evaluate_original_model(model, x_test, y_test)
     
-    tflite_model, quantization_time = convert_to_tflite(model, quantize=True)
+    tflite_model, quantization_time = convert_to_tflite(model, quantize=True, use_gpu=True)
     tflite_accuracy, tflite_total_inference_time, tflite_average_inference_time = evaluate_tflite_model(tflite_model, x_test, y_test)
     
-    model.save('original_lenet_model.h5')  # Save the original model for size comparison
-    original_model_size = os.path.getsize('original_lenet_model.h5')  # Provide path if model is saved
-    tflite_model_size = os.path.getsize('lenet_quantized.tflite')
+    model.save('original_lenet_model.h5')  
+    original_model_size = os.path.getsize('original_lenet_model.h5')  
+    tflite_model_size = len(tflite_model)
     
     print(f"Original Model Size: {original_model_size / 1024:.2f} KB")
     print(f"TFLite Model Size: {tflite_model_size / 1024:.2f} KB")
