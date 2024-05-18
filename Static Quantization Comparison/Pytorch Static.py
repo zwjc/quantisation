@@ -53,6 +53,7 @@ criterion = nn.CrossEntropyLoss()
 # Train the model
 def train_model(model, train_loader, criterion, optimizer, num_epochs=5):
     model.train()
+    start_time = time.time()
     for epoch in range(num_epochs):
         total_loss = 0
         for images, labels in train_loader:
@@ -63,14 +64,17 @@ def train_model(model, train_loader, criterion, optimizer, num_epochs=5):
             optimizer.step()
             total_loss += loss.item()
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss/len(train_loader):.4f}')
+    end_time = time.time()
+    return end_time - start_time
 
 print("Training original model:")
-train_model(model, train_loader, criterion, optimizer)
+training_time = train_model(model, train_loader, criterion, optimizer)
 
 # Prepare and convert the model for static quantization
 model.eval()
 model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
 print(model.qconfig)
+start_quantization_time = time.time()
 model_prepared = torch.quantization.prepare(model, inplace=False)
 
 # Calibrate the model with calibration data
@@ -84,6 +88,7 @@ calibrate_model(model_prepared, train_loader)
 
 # Convert to a statically quantized model
 quantized_model = torch.quantization.convert(model_prepared, inplace=False)
+end_quantization_time = time.time()
 
 def evaluate_and_print(model, model_name, data_loader):
     model.eval()
@@ -100,6 +105,7 @@ def evaluate_and_print(model, model_name, data_loader):
     accuracy = 100 * correct / total
     inference_time = end_time - start_time
     print(f'{model_name} - Accuracy: {accuracy:.2f}%, Inference Time: {inference_time:.3f} seconds')
+    return inference_time
 
 # Save and evaluate the models
 torch.save(model.state_dict(), 'original_model.pth')
@@ -113,6 +119,11 @@ print(f'Quantized Model Size: {quantized_size} bytes')
 print(f'Size Reduction: {100 * (1 - quantized_size / original_size):.2f}%')
 
 print("Evaluating original model:")
-evaluate_and_print(model, "Original Model", test_loader)
+original_inference_time = evaluate_and_print(model, "Original Model", test_loader)
 print("Evaluating static quantized model:")
-evaluate_and_print(quantized_model, "Static Quantized Model", test_loader)
+quantized_inference_time = evaluate_and_print(quantized_model, "Static Quantized Model", test_loader)
+
+print(f"Total Training Time: {training_time:.2f} seconds")
+print(f"Quantization Time: {end_quantization_time - start_quantization_time:.2f} seconds")
+print(f"Original Total Inference Time: {original_inference_time:.2f} seconds")
+print(f"Static Quantized Total Inference Time: {quantized_inference_time:.2f} seconds")
