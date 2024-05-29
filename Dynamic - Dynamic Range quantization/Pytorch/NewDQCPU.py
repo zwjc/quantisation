@@ -1,107 +1,107 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torchvision import datasets, transforms
-import time
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+from torch.utils.data import DataLoader
 import torch.quantization
+import time
+import os
 
-# Define LeNet model
-class LeNet(nn.Module):
+# Define the LeNet architecture adapted for dynamic quantization
+class DynamicQuantizedLeNet(nn.Module):
     def __init__(self):
-        super(LeNet, self).__init__()
-        self.conv1 = nn.Conv2d(1, 6, kernel_size=5)
-        self.conv2 = nn.Conv2d(6, 16, kernel_size=5)
-        self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+        super(DynamicQuantizedLeNet, self).__init__()
+        self.cnn_model = nn.Sequential(
+            nn.Conv2d(1, 6, 5),
+            nn.Tanh(),
+            nn.AvgPool2d(2, stride=2),
+            nn.Conv2d(6, 16, 5),
+            nn.Tanh(),
+            nn.AvgPool2d(2, stride=2)
+        )
+        self.fc_model = nn.Sequential(
+            nn.Linear(400, 120),
+            nn.Tanh(),
+            nn.Linear(120, 84),
+            nn.Tanh(),
+            nn.Linear(84, 10)
+        )
 
     def forward(self, x):
-        x = nn.functional.relu(self.conv1(x))
-        x = nn.functional.max_pool2d(x, kernel_size=2, stride=2)
-        x = nn.functional.relu(self.conv2(x))
-        x = nn.functional.max_pool2d(x, kernel_size=2, stride=2)
-        x = x.view(-1, 16 * 5 * 5)
-        x = nn.functional.relu(self.fc1(x))
-        x = nn.functional.relu(self.fc2(x))
-        x = self.fc3(x)
-        return nn.functional.log_softmax(x, dim=1)
+        x = self.cnn_model(x)
+        x = x.reshape(x.size(0), -1)
+        x = self.fc_model(x)
+        return x
 
-# Function to load and preprocess the MNIST dataset
-def load_and_preprocess_data():
-    transform = transforms.Compose([
-        transforms.Resize((32, 32)),
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
-    train_dataset = datasets.MNIST('data', train=True, download=True, transform=transform)
-    test_dataset = datasets.MNIST('data', train=False, transform=transform)
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1000, shuffle=False)
-    return train_loader, test_loader
+# Load and transform data
+transform = transforms.Compose([transforms.Resize((32, 32)), transforms.ToTensor()])
+train_dataset = datasets.MNIST(root='./data', train=True, transform=transform, download=True)
+test_dataset = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
+train_loader = DataLoader(dataset=train_dataset, batch_size=64, shuffle=True)
+test_loader = DataLoader(dataset=test_dataset, batch_size=100, shuffle=False)
 
-# Function to train the model
-def train_model(model, train_loader, epochs=10, lr=0.01):
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+# Instantiate the model and optimizer
+model = DynamicQuantizedLeNet()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+criterion = nn.CrossEntropyLoss()
 
-    for epoch in range(epochs):
-        model.train()
-        running_loss = 0.0
-        start_time = time.time()
-        for batch_idx, (data, target) in enumerate(train_loader):
+# Train the model
+def train_model(model, train_loader, criterion, optimizer, num_epochs=5):
+    model.train()
+    start_time = time.time()
+    for epoch in range(num_epochs):
+        total_loss = 0
+        for images, labels in train_loader:
             optimizer.zero_grad()
-            output = model(data)
-            loss = criterion(output, target)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            running_loss += loss.item()
-        end_time = time.time()
-        print(f"Epoch {epoch+1}, Loss: {running_loss / len(train_loader)}, Time: {end_time - start_time} seconds")
+            total_loss += loss.item()
+        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {total_loss/len(train_loader):.4f}')
+    end_time = time.time()
+    return end_time - start_time
 
-# Function to evaluate the model
-def evaluate_model(model, test_loader):
+print("Training original model:")
+training_time = train_model(model, train_loader, criterion, optimizer)
+
+# Convert the model to dynamic quantization
+quantized_model = torch.quantization.quantize_dynamic(model, {nn.Conv2d, nn.Linear}, dtype=torch.qint8)
+
+def evaluate_and_print(model, model_name, data_loader):
     model.eval()
     correct = 0
     total = 0
-    inference_time = 0.0
+    start_time = time.time()
     with torch.no_grad():
-        for data, target in test_loader:
-            start_time = time.time()
-            output = model(data)
-            end_time = time.time()
-            inference_time += end_time - start_time
-            _, predicted = torch.max(output.data, 1)
-            total += target.size(0)
-            correct += (predicted == target).sum().item()
-    accuracy = correct / total
-    return accuracy, inference_time
+        for data, targets in data_loader:
+            outputs = model(data)
+            _, predicted = torch.max(outputs.data, 1)
+            total += targets.size(0)
+            correct += (predicted == targets).sum().item()
+    end_time = time.time()
+    accuracy = 100 * correct / total
+    inference_time = end_time - start_time
+    print(f'{model_name} - Accuracy: {accuracy:.2f}%, Inference Time: {inference_time:.3f} seconds')
+    return inference_time
 
-def main():
-    train_loader, test_loader = load_and_preprocess_data()
-    model = LeNet()
-    train_model(model, train_loader)
+# Save and evaluate the models
+torch.save(model.state_dict(), 'original_model.pth')
+torch.save(quantized_model.state_dict(), 'quantized_model_dynamic.pth')
 
-    torch.save(model.state_dict(), 'original_lenet_model.pth')
-    original_model_size = os.path.getsize('original_lenet_model.pth')
+original_size = os.path.getsize('original_model.pth')
+quantized_size = os.path.getsize('quantized_model_dynamic.pth')
 
-    # Quantize the model
-    quantized_model = torch.quantization.quantize_dynamic(
-        model, {nn.Conv2d, nn.Linear}, dtype=torch.qint8
-    )
-    torch.save(quantized_model.state_dict(), 'quantized_lenet_model.pth')
-    quantized_model_size = os.path.getsize('quantized_lenet_model.pth')
+print(f'Original Model Size: {original_size} bytes')
+print(f'Quantized Model Size: {quantized_size} bytes')
+print(f'Size Reduction: {100 * (1 - quantized_size / original_size):.2f}%')
 
-    accuracy, inference_time = evaluate_model(model, test_loader)
-    print(f"Original Model Accuracy: {accuracy * 100:.2f}%")
-    print(f"Original Total Inference Time: {inference_time:.2f} seconds")
-    print(f"Original Average Inference Time per Sample: {inference_time / len(test_loader.dataset) * 1000:.2f} ms")
-    print(f"Original Model Size: {original_model_size / 1024:.2f} KB")
+print("Evaluating original model:")
+original_inference_time = evaluate_and_print(model, "Original Model", test_loader)
+print("Evaluating dynamic quantized model:")
+quantized_inference_time = evaluate_and_print(quantized_model, "Dynamic Quantized Model", test_loader)
 
-    quantized_accuracy, quantized_inference_time = evaluate_model(quantized_model, test_loader)
-    print(f"Quantized Model Accuracy: {quantized_accuracy * 100:.2f}%")
-    print(f"TFLite Total Inference Time: {quantized_inference_time:.2f} seconds")
-    print(f"TFLite Average Inference Time per Sample: {quantized_inference_time / len(test_loader.dataset) * 1000:.2f} ms")
-    print(f"Quantized Model Size: {quantized_model_size / 1024:.2f} KB")
-
-if __name__ == '__main__':
-    main()
+print(f"Total Training Time: {training_time:.2f} seconds")
+print(f"Original Total Inference Time: {original_inference_time:.2f} seconds")
+print(f"Dynamic Quantized Total Inference Time: {quantized_inference_time:.2f} seconds")
